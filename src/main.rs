@@ -1,11 +1,119 @@
 use raylib::prelude::*;
+use rfd::FileDialog;
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::f32::consts;
 use std::ffi::{CStr, CString};
 use std::fmt::Display;
-
+use std::fs::{self, File};
+use std::io::prelude::*;
 const WIDTH: i32 = 600;
 const HEIGHT: i32 = 800;
+
+use std::ops;
+#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+struct Vec2 {
+    x: f32,
+    y: f32,
+}
+impl Into<Vector2> for Vec2 {
+    fn into(self) -> Vector2 {
+        Vector2 {
+            x: self.x,
+            y: self.y,
+        }
+    }
+}
+
+impl From<Vector2> for Vec2 {
+    fn from(value: Vector2) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+        }
+    }
+}
+
+impl Vec2 {
+    fn new(x: f32, y: f32) -> Vec2 {
+        Vec2 { x, y }
+    }
+
+    fn zero() -> Vec2 {
+        Self { x: 0.0, y: 0.0 }
+    }
+
+    fn length(&self) -> f32 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+}
+
+impl ops::Add<Vec2> for Vec2 {
+    type Output = Vec2;
+
+    fn add(self, rhs: Vec2) -> Vec2 {
+        Vec2::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl ops::AddAssign<Vec2> for Vec2 {
+    fn add_assign(&mut self, rhs: Vec2) {
+        self.x += rhs.x;
+        self.y += rhs.y;
+    }
+}
+
+impl ops::SubAssign<Vec2> for Vec2 {
+    fn sub_assign(&mut self, rhs: Vec2) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
+    }
+}
+
+impl ops::MulAssign<f32> for Vec2 {
+    fn mul_assign(&mut self, rhs: f32) {
+        self.x *= rhs;
+        self.y *= rhs;
+    }
+}
+
+impl ops::DivAssign<f32> for Vec2 {
+    fn div_assign(&mut self, rhs: f32) {
+        self.x /= rhs;
+        self.y /= rhs;
+    }
+}
+
+impl ops::Sub<Vec2> for Vec2 {
+    type Output = Vec2;
+
+    fn sub(self, rhs: Vec2) -> Vec2 {
+        Vec2::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl ops::Mul<f32> for Vec2 {
+    type Output = Vec2;
+
+    fn mul(self, rhs: f32) -> Vec2 {
+        Vec2::new(self.x * rhs, self.y * rhs)
+    }
+}
+
+impl ops::Div<f32> for Vec2 {
+    type Output = Vec2;
+
+    fn div(self, rhs: f32) -> Vec2 {
+        Vec2::new(self.x / rhs, self.y / rhs)
+    }
+}
+
+impl Vec2 {
+    fn normalized(&self) -> Vec2 {
+        let length = (self.x * self.x + self.y * self.y).sqrt();
+        Vec2::new(self.x / length, self.y / length)
+    }
+}
 
 fn main() {
     let wireworld = Ruleset::new(vec![
@@ -41,51 +149,55 @@ fn main() {
         ]),
     ]);
 
-    let mut app = App::new(
-        wireworld,
-        vec!["head".to_owned(), "tail".to_owned(), "wire".to_owned()],
-    );
-
-    for (_, state) in [
-        State(2),
-        State(2),
-        State(2),
-        State(0),
-        State(1),
-        State(2),
-        State(2),
-    ]
-    .iter()
-    .enumerate()
-    {
-        app.add_node(
-            *state,
-            Vector2 {
-                x: get_random_value::<i32>(0, 640) as f32,
-                y: get_random_value::<i32>(0, 480) as f32,
+    let wireworld = Ruleset::new(vec![
+        Rules::new(vec![
+            Rule {
+                // wire
+                pattern: Pattern::Or(
+                    Box::new(Pattern::Equal {
+                        state: State(0),
+                        number: 1,
+                    }),
+                    Box::new(Pattern::Equal {
+                        state: State(0),
+                        number: 2,
+                    }),
+                ),
+                replacement: State(0),
             },
-        )
-    }
+            Rule {
+                pattern: Pattern::Wildcard,
+                replacement: State(1),
+            },
+        ]),
+        Rules::new(vec![
+            Rule {
+                // wire
+                pattern: Pattern::Or(
+                    Box::new(Pattern::Equal {
+                        state: State(0),
+                        number: 1,
+                    }),
+                    Box::new(Pattern::Equal {
+                        state: State(0),
+                        number: 2,
+                    }),
+                ),
+                replacement: State(0),
+            },
+            Rule {
+                pattern: Pattern::Wildcard,
+                replacement: State(1),
+            },
+        ]),
+    ]);
 
-    for edge in vec![
-        (0, 1),
-        (1, 0),
-        (1, 2),
-        (2, 1),
-        (2, 3),
-        (3, 2),
-        (3, 4),
-        (4, 3),
-        (4, 0),
-        (0, 4),
-        (0, 5),
-        (5, 0),
-        (6, 5),
-        (5, 6),
-        (6, 2),
-    ] {
-        app.add_edge(edge.0, edge.1)
-    }
+    // let mut app = App::new(
+    //     wireworld,
+    //     vec!["head".to_owned(), "tail".to_owned(), "wire".to_owned()],
+    // );
+
+    let mut app = App::new(wireworld, vec!["electron".to_owned(), "wire".to_owned()]);
 
     app.init_positions(640, 480);
 
@@ -100,6 +212,32 @@ fn main() {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Copied {
+    nodes: Vec<State>,
+    positions: Vec<Vec2>,
+    connections: Vec<Vec<usize>>,
+}
+
+impl Copied {
+    fn new(app: &App) -> Self {
+        let mut nodes = vec![];
+        let mut positions = vec![];
+        for selected in &app.selected {
+            nodes.push(app.graph.nodes_read[*selected]);
+            positions.push(app.node_positions[*selected]);
+        }
+        let mut connections = vec![];
+
+        Self {
+            nodes,
+            positions,
+            connections,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct Ruleset {
     by_state: Vec<Rules>,
 }
@@ -115,6 +253,7 @@ impl Ruleset {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 struct Rules {
     rules: Vec<Rule>,
 }
@@ -133,11 +272,13 @@ impl Rules {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 struct Rule {
     pattern: Pattern,
     replacement: State,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 enum Pattern {
     Equal { state: State, number: u32 },
     Gth { state: State, number: u32 },
@@ -202,9 +343,10 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Copy, PartialEq, Clone, Serialize, Deserialize, Debug)]
 struct State(usize);
 
+#[derive(Serialize, Deserialize)]
 struct Graph {
     ruleset: Ruleset,
     nodes_read: Vec<State>,
@@ -247,18 +389,22 @@ impl Graph {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct App {
     graph: Graph,
-    node_positions: Vec<Vector2>,
-    screen_offset: Vector2,
+    node_positions: Vec<Vec2>,
+    screen_offset: Vec2,
     zoom: f32,
     playing: bool,
     state_names: Vec<String>,
     selected_state: i32,
     dragging_from: Option<usize>,
-    selected: Option<usize>,
+    selected: Vec<usize>,
     type_scroll: i32,
     spring_simulation: bool,
+    box_drag_start: Option<Vec2>,
+    click_position: Vec2,
+    dragging_node_positions: Option<Vec<Vec2>>,
 }
 
 impl App {
@@ -266,15 +412,18 @@ impl App {
         Self {
             graph: Graph::new(Vec::new(), Vec::new(), ruleset),
             node_positions: Vec::new(),
-            screen_offset: Vector2::zero(),
+            screen_offset: Vec2::zero(),
             zoom: 1.0,
             playing: false,
             state_names,
             selected_state: 0,
             dragging_from: None,
-            selected: None,
+            selected: vec![],
             type_scroll: 0,
             spring_simulation: false,
+            box_drag_start: None,
+            click_position: Vec2::zero(),
+            dragging_node_positions: None,
         }
     }
 
@@ -287,7 +436,7 @@ impl App {
         self.graph.nbh[u].retain(|a| *a != v);
     }
 
-    fn add_node(&mut self, node: State, position: Vector2) {
+    fn add_node(&mut self, node: State, position: Vec2) {
         self.graph.add_node(node);
         self.node_positions.push(position);
     }
@@ -295,14 +444,22 @@ impl App {
     fn render(&mut self, thread: &RaylibThread, rl: &mut RaylibHandle) {
         {
             let height = rl.get_screen_height();
-            let width = rl.get_screen_width();
+            let _width = rl.get_screen_width();
+            let mouse_position = rl.get_mouse_position();
             let mut d = rl.begin_drawing(&thread);
 
             d.clear_background(Color::color_from_hsv(0.5, 0.1, 1.0));
 
-            if let Some(selected) = self.selected {
+            for selected in &self.selected {
                 d.draw_circle_v(
-                    (self.node_positions[selected] + self.screen_offset) * self.zoom,
+                    {
+                        let this =
+                            (self.node_positions[*selected] + self.screen_offset) * self.zoom;
+                        Vector2 {
+                            x: this.x,
+                            y: this.y,
+                        }
+                    },
                     32.0 * self.zoom,
                     Color::BLACK,
                 )
@@ -317,7 +474,7 @@ impl App {
                     30.0 * self.zoom,
                     // colors[self.graph.nodes_read[node].0],
                     Color::color_from_hsv(
-                        distribute_hue(self.graph.nodes_read[node].0),
+                        distribute_hue(self.graph.nodes_write[node].0),
                         0.95,
                         0.95,
                     ),
@@ -336,8 +493,32 @@ impl App {
                 }
             }
 
+            if let Some(drag_box) = self.box_drag_start {
+                d.draw_rectangle_rec(
+                    find_rect(
+                        ((drag_box + self.screen_offset) * self.zoom).into(),
+                        mouse_position,
+                    ),
+                    Color::new(10, 10, 255, 10),
+                )
+            }
+
             // gui-------------------------------------------------------------------------------
             d.gui_panel(rrect(0, 0, 100, height));
+
+            let mut strings = vec![];
+
+            for name in &self.state_names {
+                strings.push(CString::new(name.clone()).unwrap());
+            }
+            self.selected_state = d.gui_list_view_ex(
+                rrect(0, 60, 100, 300.min(height - 60)),
+                &strings.iter().map(|a| a.borrow()).collect::<Vec<&CStr>>(),
+                &mut 1,
+                &mut self.type_scroll,
+                // &mut self.selected_state,
+                self.selected_state,
+            );
             self.playing =
                 d.gui_check_box(rrect(10, 10, 10, 10), Some(rstr!("playing")), self.playing);
             d.gui_line(rrect(10, 15, 80, 20), None);
@@ -347,108 +528,40 @@ impl App {
                 self.spring_simulation,
             );
 
-            let top_left = Vector2::new(
-                (self
-                    .node_positions
-                    .iter()
-                    .map(|a| a.x as i32)
-                    .min()
-                    .unwrap_or(0) as f32)
-                    .min(self.screen_coord_to_world_coor(Vector2::zero()).x),
-                (self
-                    .node_positions
-                    .iter()
-                    .map(|a| a.y as i32)
-                    .min()
-                    .unwrap_or(0) as f32)
-                    .min(
-                        self.screen_coord_to_world_coor(Vector2 { x: 0.0, y: 0.0 })
-                            .y,
-                    ),
-            );
-
-            let bottom_right = Vector2::new(
-                (self
-                    .node_positions
-                    .iter()
-                    .map(|a| a.x as i32)
-                    .max()
-                    .unwrap_or(0) as f32)
-                    .max(
-                        self.screen_coord_to_world_coor(Vector2 {
-                            x: width as f32,
-                            y: height as f32,
-                        })
-                        .x,
-                    ),
-                (self
-                    .node_positions
-                    .iter()
-                    .map(|a| a.y as i32)
-                    .max()
-                    .unwrap_or(0) as f32)
-                    .max(
-                        self.screen_coord_to_world_coor(Vector2 {
-                            x: width as f32,
-                            y: height as f32,
-                        })
-                        .y,
-                    ),
-            );
-
-            let viewport_top_left = self.screen_coord_to_world_coor(Vector2::zero());
-            let viewport_bottom_right =
-                self.screen_coord_to_world_coor(Vector2::new(width as f32, height as f32));
-
-            println!(
-                "{:?}",
-                (viewport_top_left.x) / (top_left.x - bottom_right.x)
-            );
-
-            let aspect_ratio = (top_left.x - bottom_right.x) / (top_left.y - bottom_right.y);
-            let viewport_aspect_ratio = (viewport_top_left.x - viewport_bottom_right.x)
-                / (viewport_top_left.y - viewport_bottom_right.y);
-
-            d.draw_rectangle(
-                width - (100.0 * aspect_ratio) as i32 - 20,
-                height - (100.0 * aspect_ratio.recip()) as i32 - 20,
-                (100.0 * aspect_ratio) as i32,
-                (100.0 * aspect_ratio.recip()) as i32,
-                Color::SKYBLUE,
-            );
-
-            d.draw_rectangle(
-                width
-                    - (100.0 * aspect_ratio
-                        + (viewport_top_left.x - top_left.x) / (top_left.x - bottom_right.x)
-                            * aspect_ratio
-                            * 100.0) as i32
-                    - 20,
-                height
-                    - (100.0 * aspect_ratio.recip()
-                        + (viewport_top_left.y - top_left.y) / (top_left.y - bottom_right.y)
-                            * aspect_ratio
-                            * 100.0) as i32
-                    - 20,
-                (100.0 * viewport_aspect_ratio * aspect_ratio) as i32,
-                (100.0 * viewport_aspect_ratio.recip() * aspect_ratio) as i32,
-                Color::BLACK,
-            );
-
-            let mut strings = vec![];
-
-            for name in &self.state_names {
-                strings.push(CString::new(name.clone()).unwrap());
+            if d.gui_button(rrect(0, 365, 100, 30), Some(rstr!("open world"))) {
+                if let Some(file) = FileDialog::new().pick_file() {
+                    if let Ok(content) = fs::read_to_string(file) {
+                        if let Ok(deserialized) = serde_json::from_str(&content) {
+                            *self = deserialized;
+                        }
+                    } else {
+                        println!("unable to read file")
+                    }
+                } else {
+                    println!("unable to pick file")
+                }
+            }
+            if d.gui_button(rrect(0, 400, 100, 30), Some(rstr!("save_world"))) {
+                if let Some(file_choice) = FileDialog::new().save_file() {
+                    if let Ok(mut file) = File::create(file_choice) {
+                        if let Ok(parsed) = serde_json::to_string_pretty(&self) {
+                            file.write_all(parsed.as_bytes())
+                                .unwrap_or_else(|_| println!("unable to write to file"));
+                        } else {
+                            println!("unable to parse file")
+                        }
+                    } else {
+                        println!("unable to create file")
+                    }
+                } else {
+                    println!("unable to pick file to create")
+                }
             }
 
-            self.selected_state = d.gui_list_view_ex(
-                rrect(0, 60, 100, 300.min(height - 60)),
-                &strings.iter().map(|a| a.borrow()).collect::<Vec<&CStr>>(),
-                &mut 1,
-                &mut self.type_scroll,
-                // &mut self.selected_state,
-                self.selected_state,
-            );
+            if d.gui_button(rrect(0, 435, 100, 30), Some(rstr!("step"))) {
+                self.step();
+            }
+
             //--------------------------------------------------------------------------------------------
         }
 
@@ -463,14 +576,14 @@ impl App {
         self.graph.step();
     }
 
-    fn screen_coord_to_world_coor(&self, pos: Vector2) -> Vector2 {
-        pos / self.zoom - self.screen_offset
+    fn screen_coord_to_world_coor(&self, pos: Vec2) -> Vec2 {
+        pos / self.zoom - self.screen_offset.into()
     }
 
     fn init_positions(&mut self, width: usize, height: usize) {
         let size = self.node_positions.len();
         for (i, position) in self.node_positions.iter_mut().enumerate() {
-            *position = Vector2::new(
+            *position = Vec2::new(
                 (i as f32 / size as f32 * 2.0 * consts::PI).cos() * 100 as f32 + width as f32 / 2.0,
                 (i as f32 / size as f32 * 2.0 * consts::PI).sin() * 100 as f32
                     + height as f32 / 2.0,
@@ -513,8 +626,8 @@ impl App {
     }
     fn draw_spring_arrow(
         d: &mut RaylibDrawHandle,
-        start: Vector2,
-        end: Vector2,
+        start: Vec2,
+        end: Vec2,
         color: Color,
         radius: f32,
     ) {
@@ -526,7 +639,7 @@ impl App {
         let direction = (end - start).normalized();
 
         // Calculate perpendicular vector to the spring direction
-        let perpendicular = Vector2 {
+        let perpendicular = Vec2 {
             x: -direction.y,
             y: direction.x,
         };
@@ -534,7 +647,7 @@ impl App {
         let control_point = (start + end) / 2.0 + perpendicular * (end - start).length() * 0.2;
 
         let arrow_direction = (end - control_point).normalized();
-        let arrow_perpendicular = Vector2 {
+        let arrow_perpendicular = Vec2 {
             x: -arrow_direction.y,
             y: arrow_direction.x,
         };
@@ -547,16 +660,16 @@ impl App {
 
         // Draw arrowhead triangle
         d.draw_triangle(
-            arrowhead_left - direction * radius,
-            end - direction * radius,
-            arrowhead_right - direction * radius,
+            <Vec2 as Into<Vector2>>::into(arrowhead_left - direction * radius),
+            <Vec2 as Into<Vector2>>::into(end - direction * radius),
+            <Vec2 as Into<Vector2>>::into(arrowhead_right - direction * radius),
             color,
         );
 
         d.draw_line_bezier_quad(
-            start + direction * radius,
-            end - direction * radius,
-            control_point,
+            <Vec2 as Into<Vector2>>::into(start + direction * radius),
+            <Vec2 as Into<Vector2>>::into(end - direction * radius),
+            <Vec2 as Into<Vector2>>::into(control_point),
             1.0,
             color,
         )
@@ -588,7 +701,8 @@ impl App {
         let mut on_blank = true;
         let mut coliding_with = None;
         for (i, node) in self.node_positions.iter().enumerate() {
-            if (self.screen_coord_to_world_coor(rl.get_mouse_position()) - *node).length() < 30.0
+            if (self.screen_coord_to_world_coor(rl.get_mouse_position().into()) - *node).length()
+                < 30.0
                 && rl.get_mouse_position().x > 100.0
             {
                 on_blank = false;
@@ -599,14 +713,64 @@ impl App {
             if on_blank {
                 self.add_node(
                     State(self.selected_state as usize),
-                    self.screen_coord_to_world_coor(rl.get_mouse_position()),
+                    self.screen_coord_to_world_coor(rl.get_mouse_position().into())
+                        .into(),
                 );
             }
         }
+        if rl.is_mouse_button_pressed(MouseButton::MOUSE_LEFT_BUTTON) {
+            self.click_position = rl.get_mouse_position().into();
+            self.dragging_node_positions = Some(self.node_positions.clone());
+        }
+
+        if rl.is_mouse_button_released(MouseButton::MOUSE_LEFT_BUTTON) {
+            if let Some(box_drag_start) = self.box_drag_start {
+                let rect = find_rect(
+                    box_drag_start.into(),
+                    self.screen_coord_to_world_coor(rl.get_mouse_position().into())
+                        .into(),
+                );
+
+                let x_1 = rect.x;
+                let y_1 = rect.y;
+                let x_2 = rect.width + rect.x;
+                let y_2 = rect.height + rect.y;
+
+                if !rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) {
+                    self.selected = vec![];
+                }
+                for (i, position) in self.node_positions.iter().enumerate() {
+                    if position.x >= x_1
+                        && position.x <= x_2
+                        && position.y >= y_1
+                        && position.y <= y_2
+                    {
+                        self.selected.push(i)
+                    }
+                }
+            }
+        }
+        if rl.is_mouse_button_released(MouseButton::MOUSE_LEFT_BUTTON) {
+            self.dragging_node_positions = None;
+        }
+        // moving multiple nodes
         if rl.is_mouse_button_down(MouseButton::MOUSE_LEFT_BUTTON) {
-            if let Some(node) = coliding_with {
-                self.node_positions[node] =
-                    self.screen_coord_to_world_coor(rl.get_mouse_position());
+            match self.box_drag_start {
+                None => {
+                    if let Some(_) = coliding_with {
+                        for selected in &self.selected {
+                            if let Some(dragging) = self.dragging_node_positions.clone() {
+                                self.node_positions[*selected] = dragging[*selected]
+                                    + self
+                                        .screen_coord_to_world_coor(rl.get_mouse_position().into())
+                                    - self.screen_coord_to_world_coor(self.click_position.into())
+                            } else {
+                                println!("error")
+                            }
+                        }
+                    }
+                }
+                _ => (),
             }
         }
         if rl.is_mouse_button_pressed(MouseButton::MOUSE_RIGHT_BUTTON) {
@@ -630,24 +794,45 @@ impl App {
             }
         }
 
-        if let Some(node) = self.selected {
-            if rl.is_key_pressed(KeyboardKey::KEY_DELETE) {
-                self.remove_node(node);
-                self.selected = None;
-            }
+        if rl.is_key_pressed(KeyboardKey::KEY_DELETE) {
+            self.remove_selected();
         }
 
         if rl.is_mouse_button_pressed(MouseButton::MOUSE_LEFT_BUTTON) {
             if rl.get_mouse_x() > 100 {
-                self.selected = coliding_with;
+                if !rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) {
+                    if let Some(coliding_with) = coliding_with {
+                        self.selected = vec![coliding_with];
+                    }
+                } else {
+                    if let Some(coliding_with) = coliding_with {
+                        self.selected.push(coliding_with);
+                    }
+                }
             }
         }
 
         if rl.is_key_pressed(KeyboardKey::KEY_S) {
-            if let Some(selected) = self.selected {
-                self.graph.nodes_read[selected] = State(self.selected_state as usize);
-                self.graph.nodes_write[selected] = State(self.selected_state as usize);
+            for node in &self.selected {
+                self.graph.nodes_read[*node] = State(self.selected_state as usize);
+                self.graph.nodes_write[*node] = State(self.selected_state as usize);
             }
+        }
+
+        if rl.is_mouse_button_pressed(MouseButton::MOUSE_LEFT_BUTTON) && on_blank {
+            self.box_drag_start = Some(
+                self.screen_coord_to_world_coor(rl.get_mouse_position().into())
+                    .into(),
+            );
+        }
+        if !rl.is_mouse_button_down(MouseButton::MOUSE_LEFT_BUTTON) {
+            self.box_drag_start = None
+        }
+    }
+
+    fn remove_selected(&mut self) {
+        while let Some(node) = self.selected.pop() {
+            self.remove_node(node)
         }
     }
 
@@ -674,6 +859,13 @@ impl App {
             }
         }
 
+        self.selected.retain(|a| *a != idx);
+        for selection in self.selected.iter_mut() {
+            if *selection > idx {
+                *selection -= 1;
+            }
+        }
+
         self.graph.nbh.remove(idx);
     }
 }
@@ -684,4 +876,13 @@ fn distribute_hue(index: usize) -> f32 {
     let hue = ((index as f32 * golden_ratio_conjugate) % 1.0) * 360.0;
 
     hue
+}
+
+fn find_rect(corner_1: Vector2, corner_2: Vector2) -> Rectangle {
+    Rectangle::new(
+        corner_1.x.min(corner_2.x),
+        corner_1.y.min(corner_2.y),
+        (corner_2.x - corner_1.x).abs(),
+        (corner_2.y - corner_1.y).abs(),
+    )
 }

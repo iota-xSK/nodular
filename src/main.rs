@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::f32::consts;
 use std::ffi::{CStr, CString};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::fs::{self, File};
 use std::io::prelude::*;
 const WIDTH: i32 = 600;
@@ -116,7 +116,7 @@ impl Vec2 {
 }
 
 fn main() {
-    let wireworld = Ruleset::new(vec![
+    let _wireworld = Ruleset::new(vec![
         Rules::new(vec![Rule {
             // head
             pattern: Pattern::Wildcard,
@@ -212,29 +212,98 @@ fn main() {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Copied {
-    nodes: Vec<State>,
+    nodes_read: Vec<State>,
+    nodes_write: Vec<State>,
     positions: Vec<Vec2>,
     connections: Vec<Vec<usize>>,
 }
 
 impl Copied {
     fn new(app: &App) -> Self {
-        let mut nodes = vec![];
+        let mut nodes_read = vec![];
         let mut positions = vec![];
         for selected in &app.selected {
-            nodes.push(app.graph.nodes_read[*selected]);
+            nodes_read.push(app.graph.nodes_read[*selected]);
             positions.push(app.node_positions[*selected]);
         }
-        let mut connections = vec![];
+
+        let mut nodes_write = vec![];
+        for selected in &app.selected {
+            nodes_write.push(app.graph.nodes_write[*selected]);
+        }
+        let mut connections = vec![vec![]; app.selected.len()];
+
+        let mut index = 0;
+        let inverted_selection = invert_selected(&app.selected, nodes_read.len());
+        for i in 0..app.graph.nbh.len() {
+            if app.selected.contains(&i) {
+                for j in &app.graph.nbh[i] {
+                    if let Some(hello) = map_indexes(*j, &inverted_selection) {
+                        connections[index].push(hello)
+                    }
+                }
+            }
+            index += 1;
+        }
 
         Self {
-            nodes,
+            nodes_read,
+            nodes_write,
             positions,
             connections,
         }
     }
+
+    fn paste(&self, app: &mut App) {
+        let old_number_of_nodes = app.graph.nodes_read.len();
+        let mut copy = self.clone();
+        println!("{:?}", app.graph.nodes_write);
+        app.graph.nodes_write.append(&mut copy.nodes_write);
+        println!("{:?}", app.graph.nodes_write);
+        app.graph.nodes_read.append(&mut copy.nodes_read);
+
+        for i in &self.connections {
+            let mut new_positions = vec![];
+            for j in i {
+                new_positions.push(j + old_number_of_nodes)
+            }
+            app.graph.nbh.push(new_positions);
+        }
+        app.selected = (0..self.nodes_write.len())
+            .map(|a| a + old_number_of_nodes)
+            .collect();
+        app.node_positions.extend(
+            self.positions
+                .iter()
+                .map(|a| *a + Vec2::new(50.0, 50.0))
+                .collect::<Vec<Vec2>>(),
+        )
+    }
+}
+
+fn invert_selected(indexes: &[usize], len: usize) -> Vec<usize> {
+    let mut indexes_new = vec![];
+    for i in 0..len {
+        if !indexes.contains(&i) {
+            indexes_new.push(i);
+        }
+    }
+    indexes_new
+}
+
+fn map_indexes(original_index: usize, removed_indexes: &[usize]) -> Option<usize> {
+    let mut adjusted_index = original_index;
+
+    for idx in removed_indexes {
+        if *idx < adjusted_index {
+            adjusted_index -= 1;
+        } else if *idx == adjusted_index {
+            return None;
+        }
+    }
+    Some(adjusted_index)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -354,6 +423,12 @@ struct Graph {
     nbh: Vec<Vec<usize>>,
 }
 
+impl Debug for Graph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.nbh)
+    }
+}
+
 impl Display for Graph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -405,6 +480,7 @@ struct App {
     box_drag_start: Option<Vec2>,
     click_position: Vec2,
     dragging_node_positions: Option<Vec<Vec2>>,
+    clipboard: Option<Copied>,
 }
 
 impl App {
@@ -424,6 +500,7 @@ impl App {
             box_drag_start: None,
             click_position: Vec2::zero(),
             dragging_node_positions: None,
+            clipboard: None,
         }
     }
 
@@ -472,7 +549,6 @@ impl App {
                     (((self.node_positions[node].y) as i32 + self.screen_offset.y as i32) as f32
                         * self.zoom) as i32,
                     30.0 * self.zoom,
-                    // colors[self.graph.nodes_read[node].0],
                     Color::color_from_hsv(
                         distribute_hue(self.graph.nodes_write[node].0),
                         0.95,
@@ -481,7 +557,6 @@ impl App {
                 );
                 for &j in &self.graph.nbh[node] {
                     let pos_j = self.node_positions[j];
-                    // let spring = &self.springs[node];
 
                     Self::draw_spring_arrow(
                         &mut d,
@@ -676,7 +751,17 @@ impl App {
     }
 
     fn mainloop(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread) {
-        self.render(&thread, rl);
+        if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) && rl.is_key_pressed(KeyboardKey::KEY_C) {
+            self.clipboard = Some(Copied::new(&self));
+            println!("{:?}", self.clipboard);
+        }
+
+        if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) && rl.is_key_pressed(KeyboardKey::KEY_V) {
+            if let Some(clipboard) = self.clipboard.clone() {
+                clipboard.paste(self)
+            }
+        }
+
         if self.spring_simulation {
             self.update_node_positions(rl);
         }
@@ -814,7 +899,6 @@ impl App {
 
         if rl.is_key_pressed(KeyboardKey::KEY_S) {
             for node in &self.selected {
-                self.graph.nodes_read[*node] = State(self.selected_state as usize);
                 self.graph.nodes_write[*node] = State(self.selected_state as usize);
             }
         }
@@ -828,6 +912,7 @@ impl App {
         if !rl.is_mouse_button_down(MouseButton::MOUSE_LEFT_BUTTON) {
             self.box_drag_start = None
         }
+        self.render(&thread, rl);
     }
 
     fn remove_selected(&mut self) {
